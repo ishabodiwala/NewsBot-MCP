@@ -22,9 +22,10 @@ import kotlinx.serialization.json.*
 import java.io.InputStream
 import java.io.OutputStream
 
-class NewsMCPServer(private val newsApiKey: String) {
+class NewsMCPServer(private val newsApiKey: String, private val openAIApiKey: String) {
     // Base URL for the News API
     private val baseUrl = "https://newsapi.org"
+    private val chatGPTService = ChatGPTService(openAIApiKey)
 
     // Create an HTTP client with a default request configuration and JSON content negotiation
     private val httpClient = HttpClient {
@@ -100,9 +101,10 @@ class NewsMCPServer(private val newsApiKey: String) {
 
             val newsResponse = Json.decodeFromString<NewsResponse>(response)
             return newsResponse.articles.map { article ->
+                val summary = chatGPTService.summarizeText("${article.title}\n${article.description ?: ""}")
                 buildString {
                     appendLine("Title: ${article.title}")
-                    appendLine("Description: ${article.description ?: "No description available"}")
+                    appendLine("Summary: $summary")
                     appendLine("URL: ${article.url}")
                     appendLine("Published At: ${article.publishedAt}")
                 }.trim()

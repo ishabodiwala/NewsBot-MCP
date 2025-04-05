@@ -45,6 +45,10 @@ dependencies {
     // MCP SDK
     implementation("io.modelcontextprotocol:kotlin-sdk:0.4.0")
     
+    // OpenAI
+    implementation("com.aallam.openai:openai-client:4.0.1")
+    implementation("io.ktor:ktor-client-okhttp:3.0.0")
+    
     // Ktor
     implementation(platform("io.ktor:ktor-bom:2.3.7"))
     implementation("io.ktor:ktor-client-core")

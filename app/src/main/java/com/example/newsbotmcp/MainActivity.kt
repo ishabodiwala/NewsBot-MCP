@@ -36,7 +36,8 @@ import java.io.PipedOutputStream
 
 class MainActivity : ComponentActivity() {
     private val newsApiKey = "Your_News_API_Key_Here" // Replace with your actual News API key
-    private val newsServer = NewsMCPServer(newsApiKey)
+    private val openAIApiKey = "Your_OpenAI_API_Key_Here" // Replace with your actual OpenAI API key
+    private val newsServer = NewsMCPServer(newsApiKey, openAIApiKey)
 
     @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -261,10 +262,10 @@ fun NewsCard(newsItem: String) {
                 overflow = TextOverflow.Ellipsis
             )
             
-            // Description
-            if (!articleInfo.description.isNullOrBlank()) {
+            // Summary
+            if (!articleInfo.summary.isNullOrBlank()) {
                 Text(
-                    text = articleInfo.description,
+                    text = articleInfo.summary,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(bottom = 12.dp),
@@ -317,7 +318,7 @@ private fun formatPublishedDate(dateStr: String): String {
 
 private data class ArticleInfo(
     val title: String,
-    val description: String?,
+    val summary: String?,
     val url: String,
     val publishedAt: String
 )
@@ -333,7 +334,7 @@ private fun parseNewsItem(newsItem: String): ArticleInfo {
     
     return ArticleInfo(
         title = fieldMap["Title"] ?: "",
-        description = fieldMap["Description"],
+        summary = fieldMap["Summary"],
         url = fieldMap["URL"] ?: "",
         publishedAt = fieldMap["Published At"] ?: ""
     ).also {
