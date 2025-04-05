@@ -8,7 +8,7 @@
 
 - Uses MCP for managing conversation context.
 - Fetches current news based on user input.
-- Modular Kotlin design for scalability.
+- Automatic news summary generation using OpenAI language model.
 
 ## Setup Instructions
 
@@ -20,14 +20,17 @@ cd NewsBot-MCP
 ```
 ### 2. Open the project in Android Studio
 
-### 3. Add your News API key
+### 3. Add Your API Keys
 
-- Obtain an API key from https://newsapi.org
+- Obtain a **News API key** from [https://newsapi.org](https://newsapi.org).
+- Obtain an **OpenAI API key** from [https://platform.openai.com](https://platform.openai.com/account/api-keys).
+- Open the `MainActivity.kt` file and locate the API key variables.
+- Replace the placeholders with your actual keys:
+```
+  private val newsApiKey = "Your_Actual_News_API_Key"
+  private val openAIApiKey = "Your_Actual_OpenAI_API_Key"
+```
 
-- In `MainActivity.kt` file, locate the API key variable and replace it with your API key.
-```
-private val newsApiKey = "Your_News_API_Key_Here"
-```
 ### 4.Run the Application
 
 ## Demo
