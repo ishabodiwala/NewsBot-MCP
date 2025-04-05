@@ -1,4 +1,4 @@
-package com.example.newsmcp.ui.theme
+package com.example.newsbotmcp.ui.theme
 
 import androidx.compose.ui.graphics.Color
 

@@ -1,4 +1,4 @@
-package com.example.newsmcp
+package com.example.newsbotmcp
 
 import android.content.Intent
 import android.net.Uri

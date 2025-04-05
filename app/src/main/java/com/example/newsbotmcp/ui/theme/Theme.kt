@@ -1,4 +1,4 @@
-package com.example.newsmcp.ui.theme
+package com.example.newsbotmcp.ui.theme
 
 import android.app.Activity
 import android.os.Build

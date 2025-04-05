@@ -6,11 +6,11 @@ plugins {
 }
 
 android {
-    namespace = "com.example.newsmcp"
+    namespace = "com.example.newsbotmcp"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.example.newsmcp"
+        applicationId = "com.example.newsbotmcp"
         minSdk = 24
         targetSdk = 35
         versionCode = 1
