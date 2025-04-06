@@ -39,28 +39,33 @@ android {
         compose = true
     }
 
+    packaging {
+        resources {
+            excludes += "/META-INF/DEPENDENCIES"
+        }
+    }
+
 }
 
 dependencies {
     // MCP SDK
     implementation("io.modelcontextprotocol:kotlin-sdk:0.4.0")
-    
-    // OpenAI
-    implementation("com.aallam.openai:openai-client:4.0.1")
-    implementation("io.ktor:ktor-client-okhttp:3.0.0")
-    
+
+    // Anthropic Java SDK
+    implementation("com.anthropic:anthropic-java:1.1.0")
+
     // Ktor
     implementation(platform("io.ktor:ktor-bom:2.3.7"))
     implementation("io.ktor:ktor-client-core")
     implementation("io.ktor:ktor-client-cio")
     implementation("io.ktor:ktor-client-content-negotiation")
     implementation("io.ktor:ktor-serialization-kotlinx-json")
-    
+
     // Serialization
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.6.4")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.6.2")
-    
+
     // AndroidX
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
@@ -69,7 +74,7 @@ dependencies {
     implementation(libs.androidx.ui.graphics)
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
-    
+
     // Testing
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

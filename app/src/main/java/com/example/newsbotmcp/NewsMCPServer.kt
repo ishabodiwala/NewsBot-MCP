@@ -22,10 +22,10 @@ import kotlinx.serialization.json.*
 import java.io.InputStream
 import java.io.OutputStream
 
-class NewsMCPServer(private val newsApiKey: String, private val openAIApiKey: String) {
+class NewsMCPServer {
     // Base URL for the News API
     private val baseUrl = "https://newsapi.org"
-    private val chatGPTService = ChatGPTService(openAIApiKey)
+    private val newsApiKey = Config.NEWS_API_KEY
 
     // Create an HTTP client with a default request configuration and JSON content negotiation
     private val httpClient = HttpClient {
@@ -49,7 +49,7 @@ class NewsMCPServer(private val newsApiKey: String, private val openAIApiKey: St
     // Create the MCP Server instance with a basic implementation
     private val server = Server(
         Implementation(
-            name = "news", // Tool name is "news"
+            name = "news-server", // Tool name is "news-server"
             version = "1.0.0" // Version of the implementation
         ),
         ServerOptions(
@@ -96,15 +96,14 @@ class NewsMCPServer(private val newsApiKey: String, private val openAIApiKey: St
                 parameter("apiKey", newsApiKey)
                 parameter("sortBy", "publishedAt")
                 parameter("language", "en")
-                parameter("pageSize", 3)
+                parameter("pageSize", 5) // Limit to 5 articles
             }.bodyAsText()
 
             val newsResponse = Json.decodeFromString<NewsResponse>(response)
             return newsResponse.articles.map { article ->
-                val summary = chatGPTService.summarizeText("${article.title}\n${article.description ?: ""}")
                 buildString {
                     appendLine("Title: ${article.title}")
-                    appendLine("Summary: $summary")
+                    appendLine("Description: ${article.description ?: "No description available"}")
                     appendLine("URL: ${article.url}")
                     appendLine("Published At: ${article.publishedAt}")
                 }.trim()
@@ -130,7 +129,6 @@ class NewsMCPServer(private val newsApiKey: String, private val openAIApiKey: St
                 }
                 done.join()
             }
-            Log.d("TAG", "Server completed")
         } catch (e: Exception) {
             Log.e("TAG", "Server error", e)
             throw e

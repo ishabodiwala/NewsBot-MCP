@@ -20,7 +20,16 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import io.modelcontextprotocol.kotlin.sdk.CallToolRequest
+import com.anthropic.client.AnthropicClient
+import com.anthropic.client.okhttp.AnthropicOkHttpClient
+import com.anthropic.core.JsonValue
+import com.anthropic.models.messages.MessageCreateParams
+import com.anthropic.models.messages.MessageParam
+import com.anthropic.models.messages.Model
+import com.anthropic.models.messages.Tool
+import com.anthropic.models.messages.ToolUnion
+import com.fasterxml.jackson.core.type.TypeReference
+import com.fasterxml.jackson.databind.ObjectMapper
 import io.modelcontextprotocol.kotlin.sdk.Implementation
 import io.modelcontextprotocol.kotlin.sdk.TextContent
 import io.modelcontextprotocol.kotlin.sdk.client.Client
@@ -30,15 +39,11 @@ import kotlinx.io.asSink
 import kotlinx.io.asSource
 import kotlinx.io.buffered
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
 import java.io.PipedInputStream
 import java.io.PipedOutputStream
+import kotlin.jvm.optionals.getOrNull
 
 class MainActivity : ComponentActivity() {
-    private val newsApiKey = "Your_News_API_Key_Here" // Replace with your actual News API key
-    private val openAIApiKey = "Your_OpenAI_API_Key_Here" // Replace with your actual OpenAI API key
-    private val newsServer = NewsMCPServer(newsApiKey, openAIApiKey)
-
     @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -59,7 +64,7 @@ class MainActivity : ComponentActivity() {
                             .fillMaxSize()
                             .padding(padding)
                     ) {
-                        NewsApp(newsServer)
+                        NewsBotApp()
                     }
 
                 }
@@ -68,17 +73,23 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+
+
 @Composable
-fun NewsApp(newsServer: NewsMCPServer) {
+fun NewsBotApp() {
+    val newsServer = NewsMCPServer()
     var newsItems by remember { mutableStateOf<List<String?>>(emptyList()) }
     var isLoading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val topic = remember { mutableStateOf("") }
+    
     Column(modifier = Modifier.padding(16.dp)) {
-        Box(modifier = Modifier
-            .weight(2f)
-            .align(Alignment.CenterHorizontally)) {
+        Box(
+            modifier = Modifier
+                .weight(2f)
+                .align(Alignment.CenterHorizontally)
+        ) {
             when {
                 isLoading -> {
                     CircularProgressIndicator()
@@ -126,78 +137,9 @@ fun NewsApp(newsServer: NewsMCPServer) {
                         error = null
                         try {
                             withContext(Dispatchers.IO) {
-                                // Create pipes for communication
-                                val serverInput = PipedInputStream()
-                                val serverOutput = PipedOutputStream()
-                                val clientInput = PipedInputStream()
-                                val clientOutput = PipedOutputStream()
-
-                                // Connect the pipes
-                                serverInput.connect(clientOutput)
-                                clientInput.connect(serverOutput)
-
-                                // Start the server in a separate coroutine
-                                val serverJob = launch {
-                                    try {
-                                        newsServer.start(serverInput, serverOutput)
-                                    } catch (e: Exception) {
-                                        Log.e("TAG", "Server error", e)
-                                    }
-                                }
-
-                                // Create client transport
-                                val transport = StdioClientTransport(
-                                    input = clientInput.asSource().buffered(),
-                                    output = clientOutput.asSink().buffered()
-                                )
-
-                                val client = Client(
-                                    clientInfo = Implementation(
-                                        name = "news-client",
-                                        version = "1.0.0"
-                                    ),
-                                )
-
-                                try {
-                                    client.connect(transport)
-
-                                    val newsResult = client.callTool(
-                                        CallToolRequest(
-                                            name = "get_news",
-                                            arguments = JsonObject(
-                                                mapOf(
-                                                    "query" to JsonPrimitive(
-                                                        topic.value
-                                                    )
-                                                )
-                                            )
-                                        )
-                                    )?.content?.map { if (it is TextContent) it.text else it.toString() }
-
-                                    withContext(Dispatchers.Main) {
-                                        newsItems = newsResult ?: emptyList()
-                                    }
-                                } finally {
-                                    try {
-                                        serverJob.cancel()
-                                    } catch (_: Exception) {
-                                    }
-                                    try {
-                                        serverInput.close()
-                                    } catch (_: Exception) {
-                                    }
-                                    try {
-                                        serverOutput.close()
-                                    } catch (_: Exception) {
-                                    }
-                                    try {
-                                        clientInput.close()
-                                    } catch (_: Exception) {
-                                    }
-                                    try {
-                                        clientOutput.close()
-                                    } catch (_: Exception) {
-                                    }
+                                val result = searchNews(topic.value, newsServer)
+                                withContext(Dispatchers.Main) {
+                                    newsItems = result
                                 }
                             }
                         } catch (e: Exception) {
@@ -213,11 +155,267 @@ fun NewsApp(newsServer: NewsMCPServer) {
                 Text(text = "Search")
             }
         }
+    }
+}
 
+/**
+ * Searches for news articles based on the provided query using the MCP server.
+ */
+private suspend fun searchNews(query: String, newsServer: NewsMCPServer): List<String> {
+    // Setup the client and server
+    val (client, transport, serverJob, pipes) = setupMCPServerAndClient(newsServer)
+    
+    try {
+        client.connect(transport)
+        
+        // Get the list of available tools
+        val tools = getAvailableTools(client)
+        
+        // Create the Anthropic client and process the user query
+        return processUserQuery(query, tools, client)
+    } finally {
+        // Clean up resources
+        cleanupResources(serverJob, pipes)
+    }
+}
 
+/**
+ * Sets up the MCP server and client with pipes for communication.
+ */
+private fun setupMCPServerAndClient(newsServer: NewsMCPServer): ClientServerSetup {
+    // Create pipes for communication
+    val serverInput = PipedInputStream()
+    val serverOutput = PipedOutputStream()
+    val clientInput = PipedInputStream()
+    val clientOutput = PipedOutputStream()
+
+    // Connect the pipes
+    serverInput.connect(clientOutput)
+    clientInput.connect(serverOutput)
+
+    // Start the server in a separate coroutine
+    val serverJob = CoroutineScope(Dispatchers.IO).launch {
+        try {
+            newsServer.start(serverInput, serverOutput)
+        } catch (e: Exception) {
+            Log.e("TAG", "Server error", e)
+        }
     }
 
+    // Create client transport
+    val transport = StdioClientTransport(
+        input = clientInput.asSource().buffered(),
+        output = clientOutput.asSink().buffered()
+    )
 
+    val client = Client(
+        clientInfo = Implementation(
+            name = "news-client",
+            version = "1.0.0"
+        ),
+    )
+    
+    // Return the setup components
+    return ClientServerSetup(
+        client = client,
+        transport = transport,
+        serverJob = serverJob,
+        pipes = listOf(serverInput, serverOutput, clientInput, clientOutput)
+    )
+}
+
+/**
+ * Data class holding the client and server setup components.
+ */
+private data class ClientServerSetup(
+    val client: Client,
+    val transport: StdioClientTransport,
+    val serverJob: Job,
+    val pipes: List<Any>
+)
+
+/**
+ * Gets the list of available tools from the MCP client.
+ */
+private suspend fun getAvailableTools(client: Client): List<ToolUnion> {
+    val toolsResult = client.listTools()
+    return toolsResult?.tools?.map { tool ->
+        ToolUnion.ofTool(
+            Tool.builder()
+                .name(tool.name)
+                .description(tool.description ?: "")
+                .inputSchema(
+                    Tool.InputSchema.builder()
+                        .type(JsonValue.from(tool.inputSchema.type))
+                        .properties(tool.inputSchema.properties.toJsonValue())
+                        .putAdditionalProperty(
+                            "required",
+                            JsonValue.from(tool.inputSchema.required)
+                        )
+                        .build()
+                )
+                .build()
+        )
+    } ?: emptyList()
+}
+
+/**
+ * Processes the user query using Anthropic API and MCP tools.
+ */
+private suspend fun processUserQuery(query: String, tools: List<ToolUnion>, client: Client): List<String> {
+    val anthropicClient: AnthropicClient = AnthropicOkHttpClient.builder()
+        .apiKey(Config.ANTHROPIC_API_KEY)
+        .build()
+
+    val messageParamsBuilder: MessageCreateParams.Builder = MessageCreateParams.builder()
+        .model(Model.CLAUDE_3_5_SONNET_20241022)
+        .maxTokens(1024)
+
+   val messages = mutableListOf(
+        MessageParam.builder()
+            .role(MessageParam.Role.USER)
+            .content(query)
+            .build()
+    )
+
+    // Store extracted news items
+    val newsItems = mutableListOf<String>()
+    // Store raw news data for summarization
+    val rawNewsData = mutableListOf<String>()
+
+    // Send the query to the Anthropic model and get the response
+    val response = anthropicClient.messages().create(
+        messageParamsBuilder
+            .messages(messages)
+            .tools(tools)
+            .build()
+    )
+
+    response.content().forEach { content ->
+        when {
+            // If the response indicates a tool use, process it further
+            content.isToolUse() -> {
+                val toolName = content.toolUse().get().name()
+                val toolArgs = content.toolUse().get()._input()
+                    .convert(object : TypeReference<Map<String, JsonValue>>() {})
+
+                // Call the tool with provided arguments
+                val result = client.callTool(
+                    name = toolName,
+                    arguments = toolArgs ?: emptyMap()
+                )
+
+                // Extract raw news items for further processing
+                if (toolName == "get_news" && result != null) {
+                    val rawItems = result.content
+                        .filterIsInstance<TextContent>()
+                        .map { it.text ?: "" }
+                    
+                    rawNewsData.addAll(rawItems)
+                }
+
+                // Add the tool result message to the conversation
+                messages.add(
+                    MessageParam.builder()
+                        .role(MessageParam.Role.USER)
+                        .content(
+                            """
+                            "type": "tool_result",
+                            "tool_name": $toolName,
+                            "result": ${result?.content?.joinToString("\n") { (it as TextContent).text ?: "" }}
+                        """.trimIndent()
+                        )
+                        .build()
+                )
+            }
+        }
+    }
+
+    // Generate summaries from the raw news data using Claude
+    if (rawNewsData.isNotEmpty()) {
+        val summarizationPrompt = """
+            For each of the following news articles, please provide a more concise summary.
+            Keep the exact same format with Title, Summary, URL, and Published At fields.
+            Make sure to preserve the original title exactly as shown.
+            Format each article as:
+            
+            Title: [original title]
+            Summary: [your concise summary]
+            URL: [original URL]
+            Published At: [original date]
+            
+            Here are the articles:
+            ${rawNewsData.joinToString("\n\n")}
+        """.trimIndent()
+        
+        // Add the summarization request
+        messages.add(
+            MessageParam.builder()
+                .role(MessageParam.Role.USER)
+                .content(summarizationPrompt)
+                .build()
+        )
+        
+        // Get improved summaries from Claude
+        val summaryResponse = anthropicClient.messages().create(
+            messageParamsBuilder
+                .messages(messages)
+                .build()
+        )
+        
+        // Extract the generated summaries
+        val summaryText = summaryResponse.content().firstOrNull()?.text()?.getOrNull()?.text() ?: ""
+
+        // Split the summary text into individual articles and ensure proper formatting
+        val improvedArticles = summaryText
+            .split("\n\n")
+            .filter { it.contains("Title:") && it.contains("Summary:") }
+            .map { it.trim() }
+        
+        if (improvedArticles.isNotEmpty()) {
+            return improvedArticles
+        }
+    }
+
+    // Extract news items from tool results in messages if not already extracted
+    if (rawNewsData.isNotEmpty()) {
+        newsItems.addAll(rawNewsData)
+    }
+
+    // If no news items were found anywhere, display a message
+    return newsItems.ifEmpty {
+        listOf("No news articles found.")
+    }
+}
+
+/**
+ * Cleans up resources after the search operation.
+ */
+private fun cleanupResources(serverJob: Job, pipes: List<Any>) {
+    try {
+        serverJob.cancel()
+    } catch (_: Exception) {
+    }
+    
+    // Close all pipes
+    pipes.forEach { pipe ->
+        try {
+            when(pipe) {
+                is PipedInputStream -> pipe.close()
+                is PipedOutputStream -> pipe.close()
+            }
+        } catch (_: Exception) {
+        }
+    }
+}
+
+/**
+ * Extension function to convert JsonObject to JsonValue for Anthropic API.
+ */
+private fun JsonObject.toJsonValue(): JsonValue {
+    val mapper = ObjectMapper()
+    val node = mapper.readTree(this.toString())
+    return JsonValue.fromJsonNode(node)
 }
 
 @Composable
@@ -239,7 +437,7 @@ fun NewsList(newsItems: List<String?>) {
 fun NewsCard(newsItem: String) {
     val articleInfo = parseNewsItem(newsItem)
     val context = LocalContext.current
-    
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -261,7 +459,7 @@ fun NewsCard(newsItem: String) {
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
-            
+
             // Summary
             if (!articleInfo.summary.isNullOrBlank()) {
                 Text(
@@ -269,11 +467,11 @@ fun NewsCard(newsItem: String) {
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(bottom = 12.dp),
-                    maxLines = 3,
+                    maxLines = 4,  // Show more lines for the summary
                     overflow = TextOverflow.Ellipsis
                 )
             }
-            
+
             // URL and Published Date
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -296,7 +494,7 @@ fun NewsCard(newsItem: String) {
                 ) {
                     Text("Read More")
                 }
-                
+
                 // Published Date
                 Text(
                     text = formatPublishedDate(articleInfo.publishedAt),
@@ -328,17 +526,22 @@ private fun parseNewsItem(newsItem: String): ArticleInfo {
     val fieldMap = newsItem.lines()
         .filter { it.contains(":") }
         .associate { line ->
-            val (field, value) = line.split(":", limit = 2)
-            field.trim() to value.trim()
+            val parts = line.split(":", limit = 2)
+            val key = parts[0].trim()
+            val value = if (parts.size > 1) parts[1].trim() else ""
+            key to value
         }
-    
+
+    val title = fieldMap["Title"] ?: ""
+    val summary = fieldMap["Summary"] ?: ""
+    val url = fieldMap["URL"] ?: ""
+    val publishedAt = fieldMap["Published At"] ?: ""
+
     return ArticleInfo(
-        title = fieldMap["Title"] ?: "",
-        summary = fieldMap["Summary"],
-        url = fieldMap["URL"] ?: "",
-        publishedAt = fieldMap["Published At"] ?: ""
-    ).also {
-        Log.d("TAG", "Parsed article info: $it")
-    }
+        title = title,
+        summary = summary,
+        url = url,
+        publishedAt = publishedAt
+    )
 }
 
