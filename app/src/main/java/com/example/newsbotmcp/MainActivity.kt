@@ -8,18 +8,50 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.LifecycleOwner
 import com.anthropic.client.AnthropicClient
 import com.anthropic.client.okhttp.AnthropicOkHttpClient
 import com.anthropic.core.JsonValue
@@ -34,7 +66,12 @@ import io.modelcontextprotocol.kotlin.sdk.Implementation
 import io.modelcontextprotocol.kotlin.sdk.TextContent
 import io.modelcontextprotocol.kotlin.sdk.client.Client
 import io.modelcontextprotocol.kotlin.sdk.client.StdioClientTransport
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.io.asSink
 import kotlinx.io.asSource
 import kotlinx.io.buffered
@@ -70,9 +107,10 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+
+
     }
 }
-
 
 
 @Composable
@@ -83,7 +121,35 @@ fun NewsBotApp() {
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val topic = remember { mutableStateOf("") }
-    
+    var mcpConfig by remember { mutableStateOf<MCPConfig?>(null) }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+
+    DisposableEffect(lifecycle) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_CREATE -> {
+                    scope.launch {
+                        mcpConfig = setupMCPServerAndClient(newsServer)
+                    }
+                }
+
+                Lifecycle.Event.ON_DESTROY -> {
+                    scope.launch {
+                        mcpConfig?.let { cleanupResources(it) }
+                    }
+                }
+
+                else -> Unit
+            }
+        }
+
+        lifecycle.addObserver(observer)
+
+        onDispose {
+            lifecycle.removeObserver(observer)
+        }
+    }
+
     Column(modifier = Modifier.padding(16.dp)) {
         Box(
             modifier = Modifier
@@ -137,7 +203,7 @@ fun NewsBotApp() {
                         error = null
                         try {
                             withContext(Dispatchers.IO) {
-                                val result = searchNews(topic.value, newsServer)
+                                val result = searchNews(topic.value, mcpConfig = mcpConfig!!)
                                 withContext(Dispatchers.Main) {
                                     newsItems = result
                                 }
@@ -150,7 +216,7 @@ fun NewsBotApp() {
                         }
                     }
                 },
-                enabled = topic.value.isNotBlank(),
+                enabled = topic.value.isNotBlank() && mcpConfig != null,
             ) {
                 Text(text = "Search")
             }
@@ -161,28 +227,23 @@ fun NewsBotApp() {
 /**
  * Searches for news articles based on the provided query using the MCP server.
  */
-private suspend fun searchNews(query: String, newsServer: NewsMCPServer): List<String> {
-    // Setup the client and server
-    val (client, transport, serverJob, pipes) = setupMCPServerAndClient(newsServer)
-    
+private suspend fun searchNews(query: String, mcpConfig: MCPConfig): List<String> {
     try {
-        client.connect(transport)
-        
         // Get the list of available tools
-        val tools = getAvailableTools(client)
-        
+        val tools = getAvailableTools(mcpConfig.client)
+
         // Create the Anthropic client and process the user query
-        return processUserQuery(query, tools, client)
-    } finally {
-        // Clean up resources
-        cleanupResources(serverJob, pipes)
+        return processUserQuery(query, tools, mcpConfig)
+    } catch (e: Exception) {
+        Log.e("TAG", "Error during search", e)
+        return emptyList()
     }
 }
 
 /**
  * Sets up the MCP server and client with pipes for communication.
  */
-private fun setupMCPServerAndClient(newsServer: NewsMCPServer): ClientServerSetup {
+private suspend fun setupMCPServerAndClient(newsServer: NewsMCPServer): MCPConfig {
     // Create pipes for communication
     val serverInput = PipedInputStream()
     val serverOutput = PipedOutputStream()
@@ -190,8 +251,10 @@ private fun setupMCPServerAndClient(newsServer: NewsMCPServer): ClientServerSetu
     val clientOutput = PipedOutputStream()
 
     // Connect the pipes
-    serverInput.connect(clientOutput)
-    clientInput.connect(serverOutput)
+    withContext(Dispatchers.IO) {
+        serverInput.connect(clientOutput)
+        clientInput.connect(serverOutput)
+    }
 
     // Start the server in a separate coroutine
     val serverJob = CoroutineScope(Dispatchers.IO).launch {
@@ -214,24 +277,39 @@ private fun setupMCPServerAndClient(newsServer: NewsMCPServer): ClientServerSetu
             version = "1.0.0"
         ),
     )
-    
+
+    client.connect(transport)
+
+    val anthropicClient: AnthropicClient = AnthropicOkHttpClient.builder()
+        .apiKey(Config.ANTHROPIC_API_KEY)
+        .build()
+
+    val messageParamsBuilder: MessageCreateParams.Builder = MessageCreateParams.builder()
+        .model(Model.CLAUDE_3_5_SONNET_20241022)
+        .maxTokens(1024)
+
+
     // Return the setup components
-    return ClientServerSetup(
+    return MCPConfig(
         client = client,
         transport = transport,
         serverJob = serverJob,
-        pipes = listOf(serverInput, serverOutput, clientInput, clientOutput)
+        pipes = listOf(serverInput, serverOutput, clientInput, clientOutput),
+        anthropicClient = anthropicClient,
+        messageParamsBuilder = messageParamsBuilder
     )
 }
 
 /**
  * Data class holding the client and server setup components.
  */
-private data class ClientServerSetup(
+private data class MCPConfig(
     val client: Client,
     val transport: StdioClientTransport,
     val serverJob: Job,
-    val pipes: List<Any>
+    val pipes: List<Any>,
+    val anthropicClient: AnthropicClient,
+    val messageParamsBuilder: MessageCreateParams.Builder
 )
 
 /**
@@ -262,16 +340,13 @@ private suspend fun getAvailableTools(client: Client): List<ToolUnion> {
 /**
  * Processes the user query using Anthropic API and MCP tools.
  */
-private suspend fun processUserQuery(query: String, tools: List<ToolUnion>, client: Client): List<String> {
-    val anthropicClient: AnthropicClient = AnthropicOkHttpClient.builder()
-        .apiKey(Config.ANTHROPIC_API_KEY)
-        .build()
+private suspend fun processUserQuery(
+    query: String,
+    tools: List<ToolUnion>,
+    mcpConfig: MCPConfig
+): List<String> {
 
-    val messageParamsBuilder: MessageCreateParams.Builder = MessageCreateParams.builder()
-        .model(Model.CLAUDE_3_5_SONNET_20241022)
-        .maxTokens(1024)
-
-   val messages = mutableListOf(
+    val messages = mutableListOf(
         MessageParam.builder()
             .role(MessageParam.Role.USER)
             .content(query)
@@ -284,8 +359,8 @@ private suspend fun processUserQuery(query: String, tools: List<ToolUnion>, clie
     val rawNewsData = mutableListOf<String>()
 
     // Send the query to the Anthropic model and get the response
-    val response = anthropicClient.messages().create(
-        messageParamsBuilder
+    val response = mcpConfig.anthropicClient.messages().create(
+        mcpConfig.messageParamsBuilder
             .messages(messages)
             .tools(tools)
             .build()
@@ -300,7 +375,7 @@ private suspend fun processUserQuery(query: String, tools: List<ToolUnion>, clie
                     .convert(object : TypeReference<Map<String, JsonValue>>() {})
 
                 // Call the tool with provided arguments
-                val result = client.callTool(
+                val result = mcpConfig.client.callTool(
                     name = toolName,
                     arguments = toolArgs ?: emptyMap()
                 )
@@ -310,7 +385,7 @@ private suspend fun processUserQuery(query: String, tools: List<ToolUnion>, clie
                     val rawItems = result.content
                         .filterIsInstance<TextContent>()
                         .map { it.text ?: "" }
-                    
+
                     rawNewsData.addAll(rawItems)
                 }
 
@@ -347,7 +422,7 @@ private suspend fun processUserQuery(query: String, tools: List<ToolUnion>, clie
             Here are the articles:
             ${rawNewsData.joinToString("\n\n")}
         """.trimIndent()
-        
+
         // Add the summarization request
         messages.add(
             MessageParam.builder()
@@ -355,14 +430,14 @@ private suspend fun processUserQuery(query: String, tools: List<ToolUnion>, clie
                 .content(summarizationPrompt)
                 .build()
         )
-        
+
         // Get improved summaries from Claude
-        val summaryResponse = anthropicClient.messages().create(
-            messageParamsBuilder
+        val summaryResponse = mcpConfig.anthropicClient.messages().create(
+            mcpConfig.messageParamsBuilder
                 .messages(messages)
                 .build()
         )
-        
+
         // Extract the generated summaries
         val summaryText = summaryResponse.content().firstOrNull()?.text()?.getOrNull()?.text() ?: ""
 
@@ -371,7 +446,7 @@ private suspend fun processUserQuery(query: String, tools: List<ToolUnion>, clie
             .split("\n\n")
             .filter { it.contains("Title:") && it.contains("Summary:") }
             .map { it.trim() }
-        
+
         if (improvedArticles.isNotEmpty()) {
             return improvedArticles
         }
@@ -391,22 +466,38 @@ private suspend fun processUserQuery(query: String, tools: List<ToolUnion>, clie
 /**
  * Cleans up resources after the search operation.
  */
-private fun cleanupResources(serverJob: Job, pipes: List<Any>) {
+private suspend fun cleanupResources(mcpConfig: MCPConfig) {
     try {
-        serverJob.cancel()
+        mcpConfig.serverJob.cancel()
     } catch (_: Exception) {
     }
-    
+
     // Close all pipes
-    pipes.forEach { pipe ->
+    mcpConfig.pipes.forEach { pipe ->
         try {
-            when(pipe) {
+            when (pipe) {
                 is PipedInputStream -> pipe.close()
                 is PipedOutputStream -> pipe.close()
             }
         } catch (_: Exception) {
         }
     }
+
+    try {
+        mcpConfig.client.close()
+    } catch (_: Exception) {
+    }
+
+    try {
+        mcpConfig.transport.close()
+    } catch (_: Exception) {
+    }
+
+    try {
+        mcpConfig.anthropicClient.close()
+    } catch (_: Exception) {
+    }
+
 }
 
 /**
