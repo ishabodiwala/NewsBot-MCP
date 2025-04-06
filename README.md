@@ -8,7 +8,7 @@
 
 - Uses MCP for managing conversation context.
 - Fetches current news based on user input.
-- Automatic news summary generation using OpenAI language model.
+- Automatic news summary generation.
 
 ## Setup Instructions
 
@@ -22,16 +22,16 @@ cd NewsBot-MCP
 
 ### 3. Add Your API Keys
 
-- Obtain a **News API key** from [https://newsapi.org](https://newsapi.org).
-- Obtain an **OpenAI API key** from [https://platform.openai.com](https://platform.openai.com/account/api-keys).
-- Open the `MainActivity.kt` file and locate the API key variables.
+- Obtain a **News API key** from https://newsapi.org
+- Obtain an **Anthropic API key** from https://www.anthropic.com/api.
+- Open the `Config` file and locate the API key variables.
 - Replace the placeholders with your actual keys:
 ```
-  private val newsApiKey = "Your_Actual_News_API_Key"
-  private val openAIApiKey = "Your_Actual_OpenAI_API_Key"
+const val NEWS_API_KEY = "your_news_api_key" 
+const val ANTHROPIC_API_KEY = "your-anthropic-api-key"
 ```
 
-### 4.Run the Application
+### 4. Run the Application
 
 ## Demo
 
